@@ -7,10 +7,8 @@ import os
 from IPython.display import display, HTML
 
 # ---------------- DATABASE CONFIG ----------------
-os.environ['DJ_PASSWORD'] = 'Hunt4D4t4!'
 dj.config['database.password'] = os.getenv('DJ_PASSWORD')
 dj.config['database.host'] = 'database.eflab.org:3306'
-dj.config['database.user'] = 'eflab'
 dj.config["enable_python_native_blobs"] = True
 
 schemata = {
