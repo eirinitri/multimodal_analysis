@@ -22,6 +22,74 @@ schemata = {
 
 for schema, value in schemata.items():
     globals()[schema] = dj.create_virtual_module(schema, value, create_tables=True, create_schema=True)
+    
+
+def control_view(rp_list):
+    
+    """
+    Displays a styled control table for experimental sessions filtered by setup.
+
+    Functionality:
+    --------------
+    - Loads session/control data from `experiment.Control()`.
+    - Formats time columns (`start_time`, `stop_time`) to show only time (HH:MM:SS).
+    - Filters the dataset to include only the setups specified in `rp_list`.
+    - Builds a styled pandas DataFrame:
+        * Highlights session status using `highlight_status`
+        * Formats numeric columns (e.g., total_liquid)
+        * Hides the index for cleaner display
+    - Displays the resulting styled table.
+
+    Inputs:
+    -------
+    rp_list : list
+        List of setup identifiers used to filter the control dataset.
+        Only rows whose 'setup' value is in this list will be shown.
+
+    Output:
+    -------
+    None
+        The function does not return a value.
+        It renders a styled pandas DataFrame directly to the output (e.g., Jupyter notebook display).
+
+    Notes:
+    ------
+    - Requires a global or imported `experiment.Control()` function.
+    - Uses pandas styling; intended for interactive environments (Jupyter, Lab).
+    - Depends on `highlight_status` function for row coloring.
+    """
+
+    # -----------------------
+    # Load the data
+    # -----------------------
+    df = pd.DataFrame(experiment.Control())
+
+    # Format time columns
+    df['start_time'] = df['start_time'].apply(lambda x: str(x).split()[-1] if pd.notnull(x) else '')
+    df['stop_time'] = df['stop_time'].apply(lambda x: str(x).split()[-1] if pd.notnull(x) else '')
+
+    # -----------------------
+    # Filter setups
+    # -----------------------
+    filtered_df = df[df['setup'].isin(rp_list)]
+
+    # -----------------------
+    # Build styled table
+    # -----------------------
+    table = (
+        filtered_df[[
+            'setup', 'status', 'animal_id', 'task_idx', 'session', 'trials',
+            'total_liquid', 'state', 'difficulty', 'start_time', 'stop_time', 'notes', 'last_ping'
+        ]]
+        .style
+        .apply(highlight_status, axis=1)
+        .format({'total_liquid': "{:.0f}"})
+        .hide(axis="index")
+    )
+
+    display(table)
+
+
 
 OBJECT_ALIASES = {211: [211, 1], 219: [219, 2]}
 
@@ -46,6 +114,7 @@ def _fetch_sessions(animal_id, session_range=None, date_range=None):
         restr &= f'session <= {to_s}'
     return (restr - exp.Session.Excluded).fetch('session', 'session_tmst')
 
+# ----- unimodal visual trials -----
 def _process_object(animal_id, obj_id, sessions, difficulties, excluded_sessions):
     rows = []
     difficulty_filter = [{'difficulty': d} for d in difficulties]
@@ -230,44 +299,74 @@ def plot_visual_performance(key):
     )
         
     plt.suptitle(f"Performance in unimodal (visual) trials for each object\n(animal: {animal_id}, sessions: {from_s}-{to_s})")
-
-    # # ---------------- SAVE CSV ----------------
-    # dfs_list = []
-    
-    # for obj_id, df in object_dfs.items():
-    #     if not df.empty:
-    #         df['object'] = str(obj_id)
-    
-    #         dfs_list.append(
-    #             df[['session','object','performance','reward','punish','abort','valid_obj_trials']]
-    #         )
-    
-    #         # SAVE CSV (keep this if you want per-object saving)
-    #         save_dir = f'/mnt/lab/users/anastasios/Visualisations/csv_files/animal {animal_id}/object_performance'
-    #         os.makedirs(save_dir, exist_ok=True)
-    
-    #         from_session, to_session = key['sessions']
-    #         condition = "visual"
-    #         difficulty = key['difficulties'][0]
-    
-    #         outpath = (
-    #             f"{save_dir}/"
-    #             f"{animal_id}_{from_session}_{to_session}"
-    #             f"_obj{obj_id}"
-    #             f"_{condition}"
-    #             f"_dif{difficulty}"
-    #             f"_DataFrame.csv"
-    #         )
-    
-    #         df.to_csv(outpath, index=False)
-    #         display(HTML(f"<b>Saved object performance to:</b> {outpath}"))
-
-    # replace row_data usage
-    # row_data = pd.concat(dfs_list, ignore_index=True)
-    
-    
-
-
-
-    
     plt.show()
+
+
+# ----- multimodal trials -----
+def _process_multimodal_object(
+    animal_id, 
+    obj_id, 
+    sessions, 
+    difficulties, 
+    excluded_sessions
+):
+    rows = []
+    difficulty_filter = [{'difficulty': d} for d in difficulties]
+    
+    for session, session_tmst in zip(*sessions):
+        if session in excluded_sessions:
+            continue
+        key_session = {'animal_id': animal_id, 'session': session}
+        obj_ids = OBJECT_ALIASES.get(obj_id, [obj_id])
+        obj_query = ' OR '.join([f'obj_id={o}' for o in obj_ids])
+
+        multimodal_trials = (
+            stim.StimCondition.Trial * 
+            (stim.Panda.Object).proj('obj_mag') * 
+            exp.Trial.StateOnset * 
+            (stim.Tones).proj('tone_volume') 
+            & 'tone_volume > 0'
+            & obj_query 
+            & key_session
+            & 'state in ("Reward", "Punish",  "Abort")'
+        ).fetch(format='frame').reset_index()
+        
+        multimodal_trials['obj_mag'] = pd.to_numeric(
+            multimodal_trials['obj_mag'], 
+            errors='coerce'
+        )
+        
+        multimodal_trials = multimodal_trials[multimodal_trials['obj_mag'] > 0]
+
+        # Skip empty session
+        if multimodal_trials.empty:
+            continue
+        
+        multimodal_trials = pd.DataFrame((
+            * exp.Condition.MatchPort
+            & key_session
+            & obj_query
+            & difficulty_filter
+            & 'tone_volume=0'
+        ).fetch('session', 'trial_idx', as_dict=True))
+        
+        if visual_trials.empty:
+            continue
+        visual_keys = visual_trials.to_dict('records')
+        
+        state_visual = pd.DataFrame((exp.Trial.StateOnset & key_session & visual_keys).fetch('state', as_dict=True))
+        total_trials = len(exp.Trial & key_session)
+        rew = (state_visual['state'] == 'Reward').sum()
+        pun = (state_visual['state'] == 'Punish').sum()
+        valid = rew + pun
+        performance = round(rew / valid, 2) if valid else 0
+        rows.append({'animal_id': animal_id,
+                     'session': session,
+                     'date': session_tmst,
+                     'session_trials': total_trials,
+                     'valid_obj_trials': valid,
+                     'performance': performance,
+                     'reward': rew,
+                     'punish': pun,
+                     'abort': (state_visual['state'] == 'Abort').sum()})
+    return pd.DataFrame(rows)
