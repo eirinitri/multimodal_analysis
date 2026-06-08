@@ -63,7 +63,6 @@ def get_condition_distribution(
             & 'tone_volume > 0'
             & key
             & 'state in ("Reward", "Punish")'
-            # & 'state in ("Abort")'
         ).fetch(format='frame').reset_index()
         
         auditory_stateonset['obj_mag'] = pd.to_numeric(auditory_stateonset['obj_mag'], errors='coerce')
@@ -79,7 +78,6 @@ def get_condition_distribution(
             & key
             & 'obj_id != 215'
             & 'state in ("Reward", "Punish")'
-            # & 'state in ("Abort")'
         ).fetch(format='frame').reset_index()
         
         visual_stateonset['obj_mag'] = pd.to_numeric(visual_stateonset['obj_mag'], errors='coerce')
@@ -95,7 +93,6 @@ def get_condition_distribution(
             & key
             & 'obj_id != 215'
             & 'state in ("Reward", "Punish")'
-            # & 'state in ("Abort")'
         ).fetch(format='frame').reset_index()
         
         multi_stateonset['obj_mag'] = pd.to_numeric(multi_stateonset['obj_mag'], errors='coerce')
@@ -159,7 +156,7 @@ def get_condition_distribution(
     multimodal_215_pct = np.array(multimodal_215_pct)
     visual_215_pct = np.array(visual_215_pct)
     
-    y = np.arange(len(sessions))  # <-- THIS fixes alignment
+    y = np.arange(len(sessions))  
     
     plt.figure(figsize=(10, max(4, len(sessions) * 0.3)))
     
@@ -170,14 +167,32 @@ def get_condition_distribution(
     plt.barh(y, visual_215_pct,left=auditory_pct + visual_pct + multimodal_pct + multimodal_215_pct, label='Visual_50/50')
     
     
-    plt.yticks(y, sessions)   # <-- correct session labels aligned to bars
+    plt.yticks(y, sessions)   
     
     plt.xticks(range(0, 101, 5))
-    plt.xlabel('Percentage', fontsize=12)
-    plt.ylabel('Session ID', fontsize=12)
-    plt.tick_params(axis='both', labelsize=12)
-    plt.title(f'Trial Modality Distribution (Animal {animal_id}) - valids Only', fontsize=12)
+    
+    plt.xlabel(
+        'Percentage', 
+        fontsize=12
+    )
+    
+    plt.ylabel(
+        'Session ID', 
+        fontsize=12
+    )
+    
+    plt.tick_params(
+        axis='both', 
+        labelsize=12
+    )
+    
+    plt.title(
+        f'Trial Modality Distribution (Animal {animal_id}) - valids Only', 
+        fontsize=12
+    )
+    
     plt.legend(fontsize=12)
+    
     plt.grid(alpha=0.3)
     
     plt.show()
@@ -189,15 +204,22 @@ def scatter_plot_modalities(
     to_session,
     stim,
     exp,
+    manual_exclusion_sessions
 ):
     restr = exp.Session() & {'animal_id': animal_id}
-    valid_sessions = (restr - exp.Session.Excluded).fetch('session')
+    
+    valid_sessions = (
+        restr - exp.Session.Excluded
+    ).fetch('session')
     
     perf_per_condition = []
     skipped_sessions = []
     
     for session in range(from_session, to_session + 1):
         if session not in valid_sessions:
+            continue
+
+        if session in manual_exclusion_sessions:
             continue
     
         key = {'animal_id': animal_id, "session":session}
@@ -389,129 +411,209 @@ def scatter_plot_modalities(
 
 
 
-
+DEFAULT_OBJECT_IDS = [211, 212, 213, 214, 215, 216, 217, 218, 219]
 OBJECT_ALIASES = {211: [211, 1], 219: [219, 2]}
 
 # ---------------- INTERNAL FUNCTIONS ----------------
 def _validate_key(key):
-    required = ['animal_id', 'difficulties', 'object_ids']
+    required = ['animal_id', 'sessions', 'difficulties']
     for r in required:
         if r not in key:
             raise KeyError(f"Missing required key: '{r}'")
-    if 'sessions' not in key and 'dates' not in key:
-        raise KeyError("Provide either 'sessions' or 'dates'")
+    # if 'sessions' not in key:
+    #     raise KeyError("Provide either 'sessions' or 'dates'")
 
-def _fetch_sessions(animal_id, session_range=None, date_range=None):
-    restr = exp.Session() & {'animal_id': animal_id}
-    if date_range:
-        from_date, to_date = date_range
-        restr &= f'session_tmst >= "{from_date}"'
-        restr &= f'session_tmst <= "{to_date}"'
-    if session_range:
-        from_s, to_s = session_range
-        restr &= f'session >= {from_s}'
-        restr &= f'session <= {to_s}'
-    return (restr - exp.Session.Excluded).fetch('session', 'session_tmst')
+def _fetch_sessions(animal_id, session_range):
+    from_s, to_s = session_range
+
+    restr = (
+        exp.Session()
+        & {'animal_id': animal_id}
+        & f'session >= {from_s}'
+        & f'session <= {to_s}'
+    )
+
+    return (restr - exp.Session.Excluded).fetch('session')
+
 
 # ----- unimodal visual trials -----
 def _process_object(animal_id, obj_id, sessions, difficulties, excluded_sessions):
+    
     rows = []
+    
     difficulty_filter = [{'difficulty': d} for d in difficulties]
-    for session, session_tmst in zip(*sessions):
+
+    for session in sessions:
+        
         if session in excluded_sessions:
             continue
+            
         key_session = {'animal_id': animal_id, 'session': session}
+
+        session_date = (exp.Session() & key_session).fetch1('session_tmst').strftime('%Y-%m-%d')
+        
         obj_ids = OBJECT_ALIASES.get(obj_id, [obj_id])
+        
         obj_query = ' OR '.join([f'obj_id={o}' for o in obj_ids])
-        visual_trials = pd.DataFrame((
-            stim.StimCondition.Trial()
-            * stim.Tones
-            * exp.Trial
-            * exp.Condition.MatchPort
-            * stim.Panda.Object
-            & key_session
-            & obj_query
-            & difficulty_filter
-            & 'tone_volume=0'
-        ).fetch('session', 'trial_idx', as_dict=True))
+        
+        visual_trials = pd.DataFrame(
+            (
+                stim.StimCondition.Trial()
+                * stim.Tones
+                * exp.Trial
+                * exp.Condition.MatchPort
+                * stim.Panda.Object
+                & key_session
+                & obj_query
+                & difficulty_filter
+                & 'tone_volume=0'
+            ).fetch(
+                'session', 
+                'trial_idx', 
+                as_dict=True
+            )
+        )
+        
         if visual_trials.empty:
             continue
+            
         visual_keys = visual_trials.to_dict('records')
-        state_visual = pd.DataFrame((exp.Trial.StateOnset & key_session & visual_keys).fetch('state', as_dict=True))
+        
+        state_visual = pd.DataFrame(
+            (
+                exp.Trial.StateOnset 
+                & key_session 
+                & visual_keys
+            ).fetch(
+                'state', 
+                as_dict=True
+            )
+        )
+        
         total_trials = len(exp.Trial & key_session)
+        
         rew = (state_visual['state'] == 'Reward').sum()
         pun = (state_visual['state'] == 'Punish').sum()
+        
         valid = rew + pun
+        
         performance = round(rew / valid, 2) if valid else 0
-        rows.append({'animal_id': animal_id,
-                     'session': session,
-                     'date': session_tmst,
-                     'session_trials': total_trials,
-                     'valid_obj_trials': valid,
-                     'performance': performance,
-                     'reward': rew,
-                     'punish': pun,
-                     'abort': (state_visual['state'] == 'Abort').sum()})
+        
+        rows.append(
+            {
+                'animal_id': animal_id,
+                'session': session,
+                # 'date': session_tmst,
+                'date': session_date,
+                'session_trials': total_trials,
+                'valid_obj_trials': valid,
+                'performance': performance,
+                'reward': rew,
+                'punish': pun,
+                'abort': (state_visual['state'] == 'Abort').sum()
+        }
+                   )
     return pd.DataFrame(rows)
 
-# ---------------- PUBLIC FUNCTIONS ----------------
 def fetch_visual_data(key):
     """
     Fetch object-wise visual performance DataFrames (without displaying them).
     Returns a dict {object_id: df}, excluding objects with no trials.
     """
     _validate_key(key)
+    
     animal_id = key['animal_id']
+    
     difficulties = key['difficulties']
-    object_ids = key['object_ids']
-    excluded_sessions = key.get('excluded_sessions', set())
-    sessions = _fetch_sessions(animal_id=animal_id,
-                               session_range=key.get('sessions'),
-                               date_range=key.get('dates'))
+    
+    # object_ids = key['object_ids']
+    object_ids = key.get('object_ids', DEFAULT_OBJECT_IDS)
+    
+    excluded_sessions = key.get(
+        'excluded_sessions', 
+        set()
+    )
+    
+    sessions = _fetch_sessions(
+        animal_id=animal_id,
+        session_range=key.get('sessions')
+    )
 
     object_dfs = {}
+    
     for obj_id in object_ids:
-        df = _process_object(animal_id=animal_id,
-                             obj_id=obj_id,
-                             sessions=sessions,
-                             difficulties=difficulties,
-                             excluded_sessions=excluded_sessions)
+        df = _process_object(
+            animal_id=animal_id,
+            obj_id=obj_id,
+            sessions=sessions,
+            difficulties=difficulties,
+            excluded_sessions=excluded_sessions
+        )
+        
         if not df.empty:
             object_dfs[obj_id] = df
+            
     return object_dfs
 
 
-def visual_df(key):
+def get_visual_performance_summary(key):
     """
     Fetch and display object-wise DataFrames in Jupyter.
     """
     object_dfs = fetch_visual_data(key)
+    
+    display(HTML("<h2><b>Unimodal visual trials</b></h2>"))    
+    
     for obj_id, df in object_dfs.items():
         print(f"Object {obj_id}:")
         display(df)
+        
     return object_dfs
 
 
-def plot_visual_performance(key):
+def plot_visual_performance_per_object(
+    key,
+    criterion=0.65
+):
     """
     Fetch data and plot performance (line + bar) only, no DataFrame display.
     """
     animal_id = key['animal_id']
+    
     difficulties = key['difficulties'] 
+    
     object_dfs = fetch_visual_data(key)  # fetch silently
+    
     row_data = []
+    
     for obj_id, df in object_dfs.items():
         if not df.empty:
             df['object'] = str(obj_id)
-            row_data.append(df[['session', 'object', 'performance', 'reward', 'punish', 'abort', 'valid_obj_trials']])
+            row_data.append(
+                df[[
+                    'session', 
+                    'object', 
+                    'performance', 
+                    'reward', 
+                    'punish', 
+                    'abort', 
+                    'valid_obj_trials'
+                ]]
+            )
         else:
-            print(f"🫠 Skipped file for object {obj_id}. Empty or malformed.")
+            print(
+                f"🫠 Skipped file for object {obj_id}. Empty or malformed."
+            )
     if not row_data:
-        print("🚫 No valid data to plot.")
+        print(
+            "🚫 No valid data to plot."
+        )
         return
 
     row_data = pd.concat(row_data, ignore_index=True)
+    
     row_data['session'] = row_data['session'].astype(str)
+    
     # Make session numeric
     row_data['session'] = pd.to_numeric(row_data['session'])
 
@@ -522,40 +624,91 @@ def plot_visual_performance(key):
         from_s = row_data['session'].min()
         to_s = row_data['session'].max()
 
-    # Create a full session x object grid
-    sessions_all = np.arange(row_data['session'].min(), row_data['session'].max() + 1)
-    objects_all = row_data['object'].unique()
-
-    full_index = pd.MultiIndex.from_product([sessions_all, objects_all], names=['session', 'object'])
-    df_full = row_data.set_index(['session','object']).reindex(full_index).reset_index()
+    sessions = sorted(row_data["session"].unique())
+    
+    session_map = {s: i for i, s in enumerate(sessions)}
+    
+    row_data["session_idx"] = row_data["session"].map(session_map)
 
     # Line plot -------------------------------
     fig, axes = plt.subplots(1, 2, 
                              figsize=(18, 5), # figure size
                              constrained_layout=True)
     sns.lineplot(
-        data=df_full, 
-        x='session', 
+        data=row_data, 
+        x='session_idx', 
         y='performance', 
         hue='object', 
         marker='o', 
-        ax=axes[0])
-    axes[0].set_title(f"Performance across sessions",fontsize=10)
+        ax=axes[0]
+    )
+    
+    axes[0].set_title(
+        f"Performance across sessions",
+        fontsize=18
+    )
+
+    axes[0].set_xlabel(
+        'Session idx',
+        fontsize=18
+    )
+
+    # axes[0].set_xticks(
+    #     rotation = 80
+    # )
+    
+    axes[0].set_ylabel(
+        'Performance',
+        fontsize=18
+    )
+    
     axes[0].set_ylim(0, 1.1)
+    
     axes[0].grid(alpha=0.2)
-    axes[0].axhline(y=0.5, color='r', linestyle='--', alpha=0.3, label='chance')
-    axes[0].axhline(y=0.70, color='g', linestyle='--', alpha=0.3, label='criterion')
-    axes[0].tick_params(axis='x', rotation=80)
+
+    # horizontal line for chance level in unimodal-visual trials
+    axes[0].axhline(
+        y=0.5, 
+        color='grey', 
+        linestyle='--', 
+        alpha=0.3, 
+        label='chance'
+    )
+
+    # horizontal line for criterion in unimodal-visual trials
+    axes[0].axhline(
+        criterion, 
+        color='g', 
+        linestyle='--', 
+        alpha=0.3, 
+        label=f'criterion ({criterion:.0%})'
+    )
+    
+    axes[0].tick_params(
+        axis='both', 
+        labelsize=16
+    )
+    
     axes[0].set_axisbelow(True)
-    axes[0].legend(title='Object ID', fontsize=8)
-    all_sessions = np.arange(df_full['session'].min(), df_full['session'].max()+1)
-    axes[0].set_xticks(all_sessions)
-    axes[0].set_xticklabels(all_sessions)
+    
+    axes[0].legend(
+        fontsize=8
+    )
+    
+    axes[0].set_xticks(range(len(sessions)))
+
+    axes[0].set_xticklabels(
+        sessions, 
+        rotation=80
+    )
+
 
     # Bar plot ------------------------------------------
     performance_summary = row_data.groupby('object')[['reward', 'punish']].sum().reset_index()
-    performance_summary['mean_performance'] = round(performance_summary['reward'] /
-                                                    (performance_summary['reward'] + performance_summary['punish']), 2)
+    performance_summary['mean_performance'] = round(
+        performance_summary['reward'] / (
+            performance_summary['reward'] + performance_summary['punish']), 2)
+    
     sns.barplot(
         data=row_data,
         x='object',
@@ -564,15 +717,47 @@ def plot_visual_performance(key):
         errorbar=('ci', 95),
         ax=axes[1]
     )
+    
     axes[1].set_title(
-        f'Mean performance per object (± 95% CI)', fontsize=10)
-    axes[1].set_ylabel('Mean Performance')
-    axes[1].set_xlabel('Object ID')
+        f'Mean performance per object (± 95% CI)', 
+        fontsize=18
+    )
+    axes[1].set_ylabel(
+        'Mean performance',
+        fontsize=18
+    )
+    
+    axes[1].set_xlabel(
+        'Object ids',
+        fontsize=18
+    )
+
+    axes[1].tick_params(
+        axis='both', 
+        labelsize=16
+    )
+    
     axes[1].set_ylim(0, 1)
+    
     axes[1].grid(axis='y', alpha=0.2)
-    axes[1].axhline(y=0.5, color='grey', linestyle='--', alpha=0.3)  # horizontal red line for chance level (0.50)
-    axes[1].axhline(y=0.70, color='green', linestyle='--', alpha=0.3) # horizontal green line for criterion (0.70)
+    
+    axes[1].axhline(
+        y=0.5, 
+        color='grey', 
+        linestyle='--', 
+        alpha=0.3
+    ) 
+    
+    axes[1].axhline(
+        criterion, 
+        color='green', 
+        linestyle='--', 
+        alpha=0.3,
+        label=f'criterion ({criterion:.0%})'
+    ) 
+    
     axes[1].set_axisbelow(True)
+    
     # Remove redundant legend on bar plot
     axes[1].get_legend()
     
@@ -597,75 +782,381 @@ def plot_visual_performance(key):
                                pad=5) # small padding around the text
     )
         
-    plt.suptitle(f"Performance in unimodal (visual) trials for each object\n(animal: {animal_id}, sessions: {from_s}-{to_s})")
+    plt.suptitle(
+        f"Performance in unimodal $\\mathbf{{visual}}$ trials for each object (animal: {animal_id}, sessions: {from_s}-{to_s})"
+    )
+    
     plt.show()
 
 
-# ----- multimodal trials -----
+# --------------- multimodal trials ---------------
 def _process_multimodal_object(
-    animal_id, 
-    obj_id, 
-    sessions, 
-    difficulties, 
+    animal_id,
+    obj_id,
+    sessions,
+    difficulties,
     excluded_sessions
 ):
     rows = []
+
     difficulty_filter = [{'difficulty': d} for d in difficulties]
-    
-    for session, session_tmst in zip(*sessions):
+
+    for session in sessions:
+
         if session in excluded_sessions:
             continue
-        key_session = {'animal_id': animal_id, 'session': session}
+
+        key_session = {
+            'animal_id': animal_id,
+            'session': session
+        }
+        
+        session_date = (exp.Session() & key_session).fetch1('session_tmst').strftime('%Y-%m-%d')
+
         obj_ids = OBJECT_ALIASES.get(obj_id, [obj_id])
         obj_query = ' OR '.join([f'obj_id={o}' for o in obj_ids])
 
-        multimodal_trials = (
-            stim.StimCondition.Trial * 
-            (stim.Panda.Object).proj('obj_mag') * 
-            exp.Trial.StateOnset * 
-            (stim.Tones).proj('tone_volume') 
-            & 'tone_volume > 0'
-            & obj_query 
-            & key_session
-            & 'state in ("Reward", "Punish",  "Abort")'
-        ).fetch(format='frame').reset_index()
-        
-        multimodal_trials['obj_mag'] = pd.to_numeric(
-            multimodal_trials['obj_mag'], 
+        multi_stateonset = pd.DataFrame(
+            (
+                stim.StimCondition.Trial
+                * stim.Panda.Object.proj('obj_mag')
+                * exp.Trial.StateOnset
+                * stim.Tones.proj('tone_volume')
+                & key_session
+                & obj_query
+                & difficulty_filter
+                & 'tone_volume > 0'
+                & 'state in ("Reward", "Punish", "Abort")'
+            ).fetch(
+                as_dict=True
+            )
+        )
+
+        if multi_stateonset.empty:
+            continue
+
+        multi_stateonset['obj_mag'] = pd.to_numeric(
+            multi_stateonset['obj_mag'],
             errors='coerce'
         )
-        
-        multimodal_trials = multimodal_trials[multimodal_trials['obj_mag'] > 0]
 
-        # Skip empty session
-        if multimodal_trials.empty:
+        multi_stateonset = multi_stateonset[
+            multi_stateonset['obj_mag'] > 0
+        ]
+
+        if multi_stateonset.empty:
             continue
-        
-        multimodal_trials = pd.DataFrame((
-            exp.Condition.MatchPort
-            & key_session
-            & obj_query
-            & difficulty_filter
-            & 'tone_volume=0'
-        ).fetch('session', 'trial_idx', as_dict=True))
-        
-        if visual_trials.empty:
-            continue
-        visual_keys = visual_trials.to_dict('records')
-        
-        state_visual = pd.DataFrame((exp.Trial.StateOnset & key_session & visual_keys).fetch('state', as_dict=True))
+
         total_trials = len(exp.Trial & key_session)
-        rew = (state_visual['state'] == 'Reward').sum()
-        pun = (state_visual['state'] == 'Punish').sum()
+
+        rew = (multi_stateonset['state'] == 'Reward').sum()
+        pun = (multi_stateonset['state'] == 'Punish').sum()
+        abrt = (multi_stateonset['state'] == 'Abort').sum()
+
         valid = rew + pun
+
         performance = round(rew / valid, 2) if valid else 0
-        rows.append({'animal_id': animal_id,
-                     'session': session,
-                     'date': session_tmst,
-                     'session_trials': total_trials,
-                     'valid_obj_trials': valid,
-                     'performance': performance,
-                     'reward': rew,
-                     'punish': pun,
-                     'abort': (state_visual['state'] == 'Abort').sum()})
+
+        percentage = (
+            round((valid / total_trials) * 100, 2)
+            if total_trials else 0
+        )
+
+        rows.append(
+            {
+                'animal_id': animal_id,
+                'session': session,
+                'date': session_date,
+                'session_trials': total_trials,
+                'valid_obj_trials': valid,
+                'percentage': percentage,
+                'performance': performance,
+                'reward': rew,
+                'punish': pun,
+                'abort': abrt
+            }
+        )
+
     return pd.DataFrame(rows)
+
+def fetch_multimodal_data(key):
+    """
+    Fetch object-wise multimodal performance DataFrames.
+    Returns:
+        {object_id: dataframe}
+    """
+
+    _validate_key(key)
+
+    animal_id = key['animal_id']
+    difficulties = key['difficulties']
+    # object_ids = key['object_ids']
+    object_ids = key.get('object_ids', DEFAULT_OBJECT_IDS)
+
+    excluded_sessions = key.get(
+        'excluded_sessions',
+        set()
+    )
+
+    sessions = _fetch_sessions(
+        animal_id=animal_id,
+        session_range=key.get('sessions')
+    )
+
+    object_dfs = {}
+
+    for obj_id in object_ids:
+
+        df = _process_multimodal_object(
+            animal_id=animal_id,
+            obj_id=obj_id,
+            sessions=sessions,
+            difficulties=difficulties,
+            excluded_sessions=excluded_sessions
+        )
+
+        if not df.empty:
+            object_dfs[obj_id] = df
+
+    return object_dfs
+
+def get_multimodal_performance_summary(key) :
+
+    object_dfs = fetch_multimodal_data(key)
+
+    display(HTML("<h2><b>Multimodal trials</b></h2>"))
+
+    for obj_id, df in object_dfs.items():
+
+        print(f"Object {obj_id}:")
+        display(df)
+
+    return object_dfs
+
+def plot_multimodal_performance_per_object(
+    key,
+    criterion=0.65
+):
+
+    animal_id = key['animal_id']
+
+    object_dfs = fetch_multimodal_data(key)
+
+    row_data = []
+
+    for obj_id, df in object_dfs.items():
+
+        if not df.empty:
+
+            df = df.copy()
+            df['object'] = str(obj_id)
+
+            row_data.append(
+                df[
+                    [
+                        'session',
+                        'object',
+                        'performance',
+                        'reward',
+                        'punish',
+                        'abort',
+                        'valid_obj_trials'
+                    ]
+                ]
+            )
+
+    if not row_data:
+        print("🚫 No valid multimodal data found.")
+        return
+
+    row_data = pd.concat(row_data, ignore_index=True)
+
+    row_data['session'] = pd.to_numeric(
+        row_data['session']
+    )
+    
+    
+    sessions_all = sorted(row_data['session'].unique())
+    
+
+    objects_all = row_data['object'].unique()
+
+    full_index = pd.MultiIndex.from_product(
+        [sessions_all, objects_all],
+        names=['session', 'object']
+    )
+
+    df_full = (
+        row_data
+        .set_index(['session', 'object'])
+        .reindex(full_index)
+        .reset_index()
+    )
+
+
+    # map sessions -> continuous index (0,1,2,3,...)
+    session_map = {s: i for i, s in enumerate(sorted(df_full["session"].unique()))}
+    df_full["session_idx"] = df_full["session"].map(session_map)
+
+    fig, axes = plt.subplots(
+        1,
+        2,
+        figsize=(18, 5),
+        constrained_layout=True
+    )
+
+    # ---------------- LINE PLOT ----------------
+
+    sns.lineplot(
+        data=df_full,
+        # x='session',
+        x='session_idx',
+        y='performance',
+        hue='object',
+        marker='o',
+        ax=axes[0]
+    )
+
+    sessions = sorted(df_full["session"].unique())
+
+    axes[0].set_xticks(range(len(session_map)))
+    axes[0].set_xticklabels(sorted(session_map.keys()), rotation=80)
+    
+    axes[0].set_title(
+        'Multimodal performance across sessions',
+        fontsize=18
+    )
+
+    axes[0].set_xlabel(
+        'Session idx',
+        fontsize=18
+    )
+
+    axes[0].set_ylabel(
+        'Performance',
+        fontsize=18
+    )
+
+    axes[0].tick_params(
+        axis='both', 
+        labelsize=16
+    )
+
+    axes[0].set_ylim(0, 1.1)
+
+    axes[0].axhline(
+        0.5,
+        color='grey',
+        linestyle='--',
+        alpha=0.3,
+        label='chance'
+    )
+
+    axes[0].axhline(
+        criterion,
+        color='g',
+        linestyle='--',
+        alpha=0.3,
+        label=f'criterion ({criterion:.0%})'
+    )
+
+    # axes[0].legend()
+
+    axes[0].legend(
+        fontsize=8
+    )
+
+    axes[0].grid(alpha=0.2)
+
+    # ---------------- BAR PLOT ----------------
+
+    sns.barplot(
+        data=row_data,
+        x='object',
+        y='performance',
+        hue='object',
+        errorbar=('ci', 95),
+        ax=axes[1]
+    )
+
+    axes[1].set_title(
+        'Mean multimodal performance (±95% CI)',
+        fontsize=18
+    )
+
+    axes[1].set_xlabel(
+        'Object ids',
+        fontsize=18
+    )
+
+    axes[1].set_ylabel(
+        'Mean performance',
+        fontsize=18
+    )
+
+    
+    axes[1].set_ylim(0, 1)
+
+    axes[1].axhline(
+        0.5,
+        color='grey',
+        linestyle='--',
+        alpha=0.3,
+        label='chance'
+    )
+
+    axes[1].tick_params(
+        axis='both', 
+        labelsize=16
+    )
+
+
+    axes[1].axhline(
+        criterion,
+        color='green',
+        linestyle='--',
+        alpha=0.3,
+        label=f'criterion ({criterion:.0%})'
+    )
+
+    total_trials_per_object = (
+        row_data
+        .groupby('object')['valid_obj_trials']
+        .sum()
+    )
+
+    for i, obj in enumerate(
+        row_data['object'].unique()
+    ):
+
+        n_sessions = (
+            row_data[row_data['object'] == obj]
+            .shape[0]
+        )
+
+        n_trials = total_trials_per_object[obj]
+
+        axes[1].text(
+            i,
+            0.05,
+            f'sessions={n_sessions}\ntrials={n_trials}',
+            ha='center',
+            fontsize=9,
+            bbox=dict(
+                facecolor='white',
+                edgecolor='none',
+                alpha=0.5
+            )
+        )
+
+    if key.get('sessions'):
+        from_s, to_s = key['sessions']
+        session_text = f"{from_s}-{to_s}"
+    else:
+        session_text = "selected range"
+
+    plt.suptitle(
+        f"Performance in $\\mathbf{{multimodal}}$ trials for each object (animal: {animal_id}, sessions: {session_text})"
+    )
+
+    plt.show()
