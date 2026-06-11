@@ -644,7 +644,7 @@ def plot_visual_performance_per_object(
     )
     
     axes[0].set_title(
-        f"Performance across sessions",
+        f"Visual performance across sessions",
         fontsize=18
     )
 
@@ -653,9 +653,6 @@ def plot_visual_performance_per_object(
         fontsize=18
     )
 
-    # axes[0].set_xticks(
-    #     rotation = 80
-    # )
     
     axes[0].set_ylabel(
         'Performance',
@@ -719,7 +716,7 @@ def plot_visual_performance_per_object(
     )
     
     axes[1].set_title(
-        f'Mean performance per object (± 95% CI)', 
+        f'Mean visual performance per object (± 95% CI)', 
         fontsize=18
     )
     axes[1].set_ylabel(
@@ -920,7 +917,7 @@ def fetch_multimodal_data(key):
 
     return object_dfs
 
-def get_multimodal_performance_summary(key) :
+def get_multimodal_performance_summary(key):
 
     object_dfs = fetch_multimodal_data(key)
 
@@ -1009,7 +1006,6 @@ def plot_multimodal_performance_per_object(
 
     sns.lineplot(
         data=df_full,
-        # x='session',
         x='session_idx',
         y='performance',
         hue='object',
@@ -1060,8 +1056,6 @@ def plot_multimodal_performance_per_object(
         label=f'criterion ({criterion:.0%})'
     )
 
-    # axes[0].legend()
-
     axes[0].legend(
         fontsize=8
     )
@@ -1095,7 +1089,7 @@ def plot_multimodal_performance_per_object(
     )
 
     
-    axes[1].set_ylim(0, 1)
+    axes[1].set_ylim(0, 1.1)
 
     axes[1].axhline(
         0.5,
@@ -1159,4 +1153,223 @@ def plot_multimodal_performance_per_object(
         f"Performance in $\\mathbf{{multimodal}}$ trials for each object (animal: {animal_id}, sessions: {session_text})"
     )
 
+    plt.show()
+
+# Performance in unimodal-auditory trials 
+def compute_auditory_performance_summary(key):
+    animal_id = key['animal_id']
+    from_session, to_session = key['sessions']
+    difficulty = key.get('difficulties')
+    manual_exclusion_sessions = key.get('excluded_sessions', [])
+    
+    restr = exp.Session() & {'animal_id': animal_id}
+    valid_sessions = (restr - exp.Session.Excluded).fetch('session')
+    
+    
+    
+    rows_pulse0 = []
+    rows_pulse100 = []
+    
+    for session in range(from_session,to_session + 1):
+    
+        if session not in valid_sessions:
+                continue
+    
+        key_session = {'animal_id': animal_id, 'session': session}
+    
+        session_date = (
+            exp.Session() & key_session).fetch1('session_tmst').strftime('%Y-%m-%d')
+    
+        auditory_trials = (
+            stim.StimCondition.Trial *
+            (stim.Panda.Object).proj('obj_mag') *
+            exp.Trial.StateOnset *
+            (stim.Tones).proj('tone_volume', 'tone_pulse_freq')
+            & 'tone_volume > 0'
+            & key_session
+            & 'state in ("Reward", "Punish", "Abort")'
+        ).fetch(format='frame').reset_index()
+    
+        auditory_trials['obj_mag'] = pd.to_numeric(auditory_trials['obj_mag'], errors='coerce')
+        auditory_trials = auditory_trials[auditory_trials['obj_mag'] == 0]
+    
+        pulse0 = auditory_trials[auditory_trials['tone_pulse_freq'] == 0]
+        pulse100 = auditory_trials[auditory_trials['tone_pulse_freq'] == 100]
+    
+        for df_trials, rows in [(pulse0, rows_pulse0), (pulse100, rows_pulse100)]:
+    
+            reward = (df_trials['state'] == 'Reward').sum()
+            punish = (df_trials['state'] == 'Punish').sum()
+            abort = (df_trials['state'] == 'Abort').sum()
+    
+            perf = (
+                round(reward / (reward + punish), 2)
+                if (reward + punish) > 0 else np.nan
+            )
+    
+            rows.append({
+                'animal_id': animal_id,
+                'session': session,
+                'date': session_date,
+                'performance': perf,
+                'reward': reward,
+                'punish': punish,
+                'abort': abort,
+                'n_trials': len(df_trials),
+                'tone_pulse_freq': 0 if df_trials is pulse0 else 100
+            })
+
+    pulse0_df = pd.DataFrame(rows_pulse0)
+    pulse100_df = pd.DataFrame(rows_pulse100)
+
+    return pulse0_df, pulse100_df
+
+def get_auditory_performance_summary(
+    key, 
+    pulse_freq='all'
+):
+  
+    pulse0_df, pulse100_df = compute_auditory_performance_summary(key)
+    
+    if pulse_freq == 'all':
+        display(HTML('<b><h4>Pulsed tone</b> (<i>tone_pulse_freq = 100 Hz</i>)</h4>'))
+        display(pulse100_df)
+    
+        display(HTML('<b><h4>Continuous tone</b> (<i>tone_pulse_freq = 0 Hz</i>)</h4>'))
+        display(pulse0_df)
+
+    elif pulse_freq == 0:
+        display(HTML('<b><h4>Continuous tone</b> (<i>tone_pulse_freq = 0 Hz</i>)</h4>'))
+        display(pulse0_df)
+    
+    elif pulse_freq == 100:
+        display(HTML('<b><h4>Pulsed tone</b> (<i>tone_pulse_freq = 100 Hz</i>)</h4>'))
+        display(pulse100_df)
+        
+    else:
+        raise ValueError("pulse_freq must be 'all', 0, or 100")
+
+    return pulse0_df, pulse100_df
+
+
+def plot_auditory_performance_per_object(
+    key, 
+    criterion=0.65
+):
+    animal_id = key['animal_id']
+    from_s, to_s = key['sessions']
+    
+    # get data internally
+    pulse0_df, pulse100_df = compute_auditory_performance_summary(key)
+
+    df_all = pd.concat(
+        [pulse0_df, pulse100_df],
+        ignore_index=True
+    ).sort_values(['tone_pulse_freq', 'session'])
+
+    sessions_all = sorted(df_all['session'].unique())
+    session_map = {s: i for i, s in enumerate(sessions_all)}
+    
+    df_all['session_idx'] = df_all['session'].map(session_map)
+
+    fig, axes = plt.subplots(1, 2, 
+                             figsize=(18, 5), # figure size
+                             constrained_layout=True)
+    
+
+    # Line plot 
+    for freq in [0, 100]:
+        df_sub = df_all[df_all['tone_pulse_freq'] == freq]
+
+        axes[0].plot(
+            df_sub['session_idx'],
+            df_sub['performance'],
+            marker='o',
+            label=f'{freq} Hz'
+        )
+
+    axes[0].set_title(
+        'Auditory performance across sessions', 
+        fontsize=18
+    )
+
+    axes[0].set_xticks(range(len(sessions_all)))
+    axes[0].set_xticklabels(sessions_all, rotation=80)
+
+    axes[0].tick_params(
+        axis='both', 
+        labelsize=16
+    )
+    
+    axes[0].set_xlabel(
+        'Session idx', 
+        fontsize=18
+    )
+    
+    axes[0].set_ylabel(
+        'Performance', 
+        fontsize=18
+    )
+    
+    axes[0].set_ylim(0, 1.1)
+
+    axes[0].axhline(
+        0.5, 
+        color='grey', 
+        linestyle='--', 
+        alpha=0.3, 
+        label='chance'
+    )
+    
+    axes[0].axhline(
+        criterion, 
+        color='green', 
+        linestyle='--', 
+        alpha=0.3,
+        label=f'criterion ({criterion:.0%})'
+    )
+
+    axes[0].legend(fontsize=8)
+    axes[0].grid(alpha=0.3)
+
+    # Bar plot 
+    palette = {0: 'blue', 100: 'orange'}
+
+    sns.barplot(
+        data=df_all,
+        x='tone_pulse_freq',
+        y='performance',
+        hue='tone_pulse_freq',
+        palette=palette,
+        errorbar=('ci', 95),
+        ax=axes[1]
+    )
+
+    axes[1].set_xticks([0, 1])
+
+    axes[1].tick_params(
+        axis='both', 
+        labelsize=16
+    )
+    
+    axes[1].set_xticklabels(
+        ['0 Hz', '100 Hz'], 
+        fontsize=16
+    )
+
+    axes[1].set_title('Mean auditory performance (±95% CI)', fontsize=18)
+    axes[1].set_xlabel('Tone pulse frequency (Hz)', fontsize=18)
+    axes[1].set_ylabel('Mean performance', fontsize=18)
+    axes[1].set_ylim(0, 1.1)
+
+    axes[1].axhline(0.5, color='grey', linestyle='--', alpha=0.3)
+    axes[1].axhline(criterion, color='green', linestyle='--', alpha=0.3)
+
+    axes[1].legend_.remove() if axes[1].get_legend() else None
+
+
+    plt.suptitle(
+        f"Performance in unimodal $\\mathbf{{auditory}}$ trials for each tone frequency "
+        f"(Animal {animal_id}, sessions: {from_s}-{to_s})"
+    )
     plt.show()
